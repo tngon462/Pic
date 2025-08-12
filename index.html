@@ -33,10 +33,20 @@
     .divider{height:1px;background:#eee;margin:16px 0}
     .hint{font-size:13px;color:#666}
     .toggle{display:flex;align-items:center;gap:8px}
+    .api{display:flex;gap:8px;align-items:center;margin:8px 0}
+    .api input{min-width:360px}
   </style>
 </head>
 <body>
   <h1>Quản lý slides (slides/ & manifest.json)</h1>
+
+  <div class="api">
+    <label>API BASE:
+      <input id="apiBaseInput" type="text" placeholder="https://<TEN-APP>.vercel.app">
+    </label>
+    <button id="applyApi" class="btn-ghost">Dùng API này</button>
+    <span class="hint">Đổi nếu cần. Mặc định lấy ở biến trong code hoặc ?api=...</span>
+  </div>
 
   <!-- UPLOAD -->
   <div class="section card">
@@ -59,16 +69,27 @@
       <button class="btn-primary" id="btnSave">Lưu manifest</button>
       <label class="toggle">
         <input type="checkbox" id="deleteFilesToggle" />
-        Khi xóa khỏi manifest, **xóa cả file** trong repo
+        Khi xóa khỏi manifest, <b>xóa cả file</b> trong repo
       </label>
       <span id="msgMf" class="muted"></span>
     </div>
     <div class="divider"></div>
     <ul id="manifestList" class="list"></ul>
-    <div class="hint">Mẹo: Kéo-thả bằng biểu tượng ☰ để đổi thứ tự. Có thể sửa duration/alt trực tiếp.</div>
+    <div class="hint">Kéo-thả bằng biểu tượng ☰ để đổi thứ tự. Có thể sửa duration/alt trực tiếp.</div>
   </div>
 
 <script>
+  // === CẤU HÌNH API BASE KHI CHẠY TRÊN GITHUB PAGES ===
+  const API_BASE_DEFAULT = 'https://<TEN-APP>.vercel.app'; // TODO: đổi sang domain Vercel thật
+  let API_BASE = new URLSearchParams(location.search).get('api') || localStorage.getItem('API_BASE') || API_BASE_DEFAULT;
+  const apiInput = document.getElementById('apiBaseInput');
+  apiInput.value = API_BASE;
+  document.getElementById('applyApi').onclick = () => {
+    API_BASE = apiInput.value.trim();
+    localStorage.setItem('API_BASE', API_BASE);
+    alert('Đã đổi API BASE thành: ' + API_BASE);
+  };
+
   const $ = s => document.querySelector(s);
   const $$ = s => Array.from(document.querySelectorAll(s));
 
@@ -94,7 +115,6 @@
         </div>
       `;
       div.querySelector('.del').onclick = () => {
-        // remove this file from FileList (rebuild)
         const arr = Array.from(filesInput.files).filter(f => f !== file);
         const dt = new DataTransfer();
         arr.forEach(f => dt.items.add(f));
@@ -108,24 +128,23 @@
   $('#btnUpload').onclick = async () => {
     msgUp.textContent = '';
     const files = filesInput.files;
-    if (!files || files.length === 0) { msgUp.textContent = 'Chưa chọn ảnh'; msgUp.className='err'; return; }
+    if (!files || files.length === 0) { msgUp.textContent='Chưa chọn ảnh'; msgUp.className='err'; return; }
 
     const fd = new FormData();
     const thumbs = Array.from(preview.children);
-    Array.from(files).forEach((f, i) => fd.append('images', f));
+    Array.from(files).forEach((f) => fd.append('images', f));
     thumbs.forEach(t => fd.append('durations', t.querySelector('.dur').value || '8'));
     thumbs.forEach(t => fd.append('alts', t.querySelector('.alt').value || ''));
 
     try{
-      const res = await fetch('/api/add-slides', { method:'POST', body: fd });
+      const res = await fetch(`${API_BASE}/api/add-slides`, { method:'POST', body: fd, mode:'cors' });
       const data = await res.json();
       if(!res.ok) throw new Error(data.error || res.statusText);
       msgUp.textContent = `✔ Đã thêm ${data.added} ảnh (commit ${data.commitSha.slice(0,7)})`;
       msgUp.className = 'ok';
-      // reset
       filesInput.value = '';
       clearPreview();
-      await loadManifest(); // refresh danh sách
+      await loadManifest();
     }catch(e){
       msgUp.textContent = '✖ ' + e.message;
       msgUp.className = 'err';
@@ -154,15 +173,13 @@
         </div>
       `;
       li.querySelector('.del').onclick = () => { li.remove(); };
-      // Drag & drop
       li.addEventListener('dragstart', ev => {
         ev.dataTransfer.setData('text/plain', li.dataset.index);
         li.classList.add('dragging');
       });
       li.addEventListener('dragend', () => {
-        $$('li.item').forEach(x => x.classList.remove('dragging'));
-        // reindex
         $$('.item').forEach((el,i)=> el.dataset.index = i);
+        $$('.item').forEach(x => x.classList.remove('dragging'));
       });
       li.addEventListener('dragover', ev => {
         ev.preventDefault();
@@ -179,19 +196,23 @@
   async function loadManifest(){
     msgMf.textContent = 'Đang tải manifest...';
     msgMf.className='muted';
-    const res = await fetch('/api/manifest');
-    const data = await res.json();
-    if (!res.ok) { msgMf.textContent = '✖ '+(data.error||res.statusText); msgMf.className='err'; return; }
-    window.__manifestOriginal = data.items; // normalized array [{src,duration,alt}]
-    renderManifest(structuredClone(window.__manifestOriginal));
-    msgMf.textContent = `Đã tải ${data.items.length} mục`;
-    msgMf.className='muted';
+    try {
+      const res = await fetch(`${API_BASE}/api/manifest`, { mode:'cors' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || res.statusText);
+      window.__manifestOriginal = data.items;
+      renderManifest(structuredClone(window.__manifestOriginal));
+      msgMf.textContent = `Đã tải ${data.items.length} mục`;
+      msgMf.className='muted';
+    } catch (e) {
+      msgMf.textContent = '✖ '+e.message;
+      msgMf.className='err';
+    }
   }
 
   $('#btnReload').onclick = loadManifest;
 
   $('#btnSave').onclick = async () => {
-    // Collect list (the current DOM order)
     const items = $$('.item').map(li => {
       const src = li.querySelector('.src').getAttribute('title') || li.querySelector('.src').textContent.trim();
       const durVal = li.querySelector('.dur').value.trim();
@@ -205,10 +226,11 @@
 
     try{
       msgMf.textContent = 'Đang lưu...'; msgMf.className='muted';
-      const res = await fetch('/api/manifest', {
+      const res = await fetch(`${API_BASE}/api/manifest`, {
         method:'PUT',
         headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ items, delete_files: deleteFiles })
+        body: JSON.stringify({ items, delete_files: deleteFiles }),
+        mode:'cors'
       });
       const data = await res.json();
       if(!res.ok) throw new Error(data.error || res.statusText);
@@ -220,7 +242,6 @@
     }
   };
 
-  // init
   loadManifest();
 </script>
 </body>
