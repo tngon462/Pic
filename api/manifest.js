@@ -7,8 +7,21 @@ const {
   GH_OWNER = 'tngon462',
   GH_REPO = 'slide',
   GH_BRANCH = 'main',
-  MANIFEST_PATH = 'slides/manifest.json'
+  MANIFEST_PATH = 'slides/manifest.json',
+  CORS_ORIGIN = '*'
 } = process.env;
+
+function withCORS(req, res){
+  const list = String(CORS_ORIGIN).split(',').map(s=>s.trim());
+  const origin = req.headers.origin || '';
+  const allow = list.includes('*') || list.includes(origin) ? (origin || '*') : list[0] || '*';
+  res.setHeader('Access-Control-Allow-Origin', allow);
+  res.setHeader('Vary','Origin');
+  res.setHeader('Access-Control-Allow-Methods','GET,POST,PUT,DELETE,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers','Content-Type, Authorization');
+  if (req.method === 'OPTIONS') { res.status(200).end(); return true; }
+  return false;
+}
 
 function toBase64(buf){ return Buffer.from(buf).toString('base64'); }
 
@@ -45,21 +58,26 @@ async function putFile(path, branch, contentBase64, message, sha){
     method:'PUT',
     body: JSON.stringify(body)
   });
-  return res.json(); // {commit:{sha}, content:{...}}
+  return res.json(); // {commit:{sha}}
 }
 
 async function deleteFile(path, branch){
-  // cần sha để DELETE
   const info = await getFile(path, branch);
   if(!info) return false;
-  const res = await gh(`/repos/${GH_OWNER}/${GH_REPO}/contents/${encodeURIComponent(path)}`, {
+  const res = await fetch(`${GH_API}/repos/${GH_OWNER}/${GH_REPO}/contents/${encodeURIComponent(path)}`, {
     method:'DELETE',
+    headers:{
+      'Authorization':`Bearer ${GITHUB_TOKEN}`,
+      'Accept':'application/vnd.github+json',
+      'User-Agent':'slides-manager'
+    },
     body: JSON.stringify({
       message: `chore(slides): delete ${path}`,
       sha: info.sha,
       branch
     })
   });
+  if(!res.ok) throw new Error(`Delete file failed: ${res.status} ${await res.text()}`);
   await res.json();
   return true;
 }
@@ -71,6 +89,7 @@ function normalizeToObjects(manifest){
 }
 
 export default async function handler(req,res){
+  if (withCORS(req, res)) return;
   try{
     if(!GITHUB_TOKEN) { res.status(500).json({error:'Thiếu GITHUB_TOKEN'}); return; }
 
@@ -88,16 +107,13 @@ export default async function handler(req,res){
       const { items, delete_files = false } = req.body || {};
       if(!Array.isArray(items)) { res.status(400).json({error:'Payload phải có items[]'}); return; }
 
-      // Tải manifest cũ để tính diff (để xóa file nếu cần)
       const mfFile = await getFile(MANIFEST_PATH, GH_BRANCH);
       const oldManifest = mfFile ? JSON.parse(Buffer.from(mfFile.content, mfFile.encoding).toString('utf8')) : [];
       const oldItems = normalizeToObjects(oldManifest);
       const oldSrcs = new Set(oldItems.map(x=>x.src));
       const newSrcs = new Set(items.map(x=>x.src));
-
       const removedList = [...oldSrcs].filter(x => !newSrcs.has(x));
 
-      // Lưu manifest mới (ghi dạng mảng object)
       const content = JSON.stringify(items, null, 2);
       const out = await putFile(MANIFEST_PATH, GH_BRANCH, toBase64(Buffer.from(content,'utf8')),
                                 `chore(manifest): save (${items.length} items)`, mfFile?.sha);
