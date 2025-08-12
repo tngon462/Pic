@@ -8,13 +8,24 @@ const {
   GH_REPO = 'slide',
   GH_BRANCH = 'main',
   IMAGE_DIR = 'slides',
-  MANIFEST_PATH = 'slides/manifest.json'
+  MANIFEST_PATH = 'slides/manifest.json',
+  CORS_ORIGIN = '*' // ví dụ: 'https://tngon462.github.io'
 } = process.env;
 
-function toBase64(buf){ return Buffer.from(buf).toString('base64'); }
-function sanitizeName(name){
-  return name.toLowerCase().replace(/[^a-z0-9._-]+/g,'-').replace(/-+/g,'-').replace(/^-|-$/g,'');
+function withCORS(req, res){
+  const list = String(CORS_ORIGIN).split(',').map(s=>s.trim());
+  const origin = req.headers.origin || '';
+  const allow = list.includes('*') || list.includes(origin) ? (origin || '*') : list[0] || '*';
+  res.setHeader('Access-Control-Allow-Origin', allow);
+  res.setHeader('Vary','Origin');
+  res.setHeader('Access-Control-Allow-Methods','GET,POST,PUT,DELETE,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers','Content-Type, Authorization');
+  if (req.method === 'OPTIONS') { res.status(200).end(); return true; }
+  return false;
 }
+
+function toBase64(buf){ return Buffer.from(buf).toString('base64'); }
+function sanitizeName(name){ return name.toLowerCase().replace(/[^a-z0-9._-]+/g,'-').replace(/-+/g,'-').replace(/^-|-$/g,''); }
 
 async function parseForm(req){
   const contentType = req.headers['content-type'] || '';
@@ -45,13 +56,10 @@ async function gh(path, init={}){
 }
 
 async function getFile(path, branch){
-  try{
-    const res = await gh(`/repos/${GH_OWNER}/${GH_REPO}/contents/${encodeURIComponent(path)}?ref=${encodeURIComponent(branch)}`);
-    return await res.json();
-  }catch(e){
-    if(String(e.message).includes('404')) return null;
-    throw e;
-  }
+  const res = await gh(`/repos/${GH_OWNER}/${GH_REPO}/contents/${encodeURIComponent(path)}?ref=${encodeURIComponent(branch)}`);
+  if(res.status === 404) return null;
+  if(!res.ok) throw new Error(`Get file failed: ${res.status} ${await res.text()}`);
+  return res.json();
 }
 
 async function putFile(path, branch, contentBase64, message, sha){
@@ -61,17 +69,17 @@ async function putFile(path, branch, contentBase64, message, sha){
     method:'PUT',
     body: JSON.stringify(body)
   });
-  return res.json(); // {commit:{sha}, content:{...}}
+  return res.json(); // {commit:{sha}}
 }
 
 function normalizeToObjects(manifest){
-  // manifest có thể là mảng string, mảng object, hoặc {slides:[...]}
   const arr = Array.isArray(manifest) ? manifest
             : (Array.isArray(manifest?.slides) ? manifest.slides : []);
   return arr.map(x => typeof x === 'string' ? ({src:x}) : ({...x}));
 }
 
 export default async function handler(req,res){
+  if (withCORS(req, res)) return;
   try{
     if(req.method !== 'POST') { res.status(405).json({error:'Method not allowed'}); return; }
     if(!GITHUB_TOKEN) { res.status(500).json({error:'Thiếu GITHUB_TOKEN'}); return; }
@@ -79,25 +87,24 @@ export default async function handler(req,res){
     const { images, durations, alts } = await parseForm(req);
     if(!images.length) { res.status(400).json({error:'Chưa có ảnh'}); return; }
 
-    // 1) Lấy manifest hiện tại (nếu chưa có -> rỗng)
+    // 1) Lấy manifest (nếu chưa có -> rỗng)
     const mfFile = await getFile(MANIFEST_PATH, GH_BRANCH);
     let manifest = mfFile ? JSON.parse(Buffer.from(mfFile.content, mfFile.encoding).toString('utf8')) : [];
     let mfSha = mfFile?.sha || null;
     let items = normalizeToObjects(manifest);
 
-    // 2) Upload từng ảnh + thêm vào items
+    // 2) Upload từng ảnh + append
     const now = new Date().toISOString().replace(/[:.]/g,'').replace('T','_').slice(0,15);
     let added = 0;
     for (let i=0;i<images.length;i++){
       const file = images[i];
-      if(!file || !file.name || !file.stream) continue;
+      if(!file || !file.name) continue;
 
       const buf = Buffer.from(await file.arrayBuffer());
       const imageName = `${now}_${i+1}_${sanitizeName(file.name)}`;
       const imagePath = `${IMAGE_DIR.replace(/\/+$/,'')}/${imageName}`;
 
       await putFile(imagePath, GH_BRANCH, toBase64(buf), `chore(slides): add ${imageName}`);
-      // tránh trùng (theo src)
       if(!items.some(x => x.src === imagePath)){
         const dur = Number.isFinite(durations[i]) ? durations[i] : 8;
         const alt = (alts[i]||'').trim();
@@ -108,7 +115,7 @@ export default async function handler(req,res){
       }
     }
 
-    // 3) Ghi manifest (luôn ghi dạng mảng object cho đồng nhất)
+    // 3) Ghi manifest (ghi dạng mảng object)
     const content = JSON.stringify(items, null, 2);
     const out = await putFile(MANIFEST_PATH, GH_BRANCH, toBase64(Buffer.from(content,'utf8')),
                               `chore(manifest): append ${added} slide(s)`, mfSha);
