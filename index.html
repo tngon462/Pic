@@ -42,10 +42,10 @@
 
   <div class="api">
     <label>API BASE:
-      <input id="apiBaseInput" type="text" placeholder="https://<TEN-APP>.vercel.app">
+      <input id="apiBaseInput" type="text" placeholder="https://pic-flame.vercel.app">
     </label>
     <button id="applyApi" class="btn-ghost">Dùng API này</button>
-    <span class="hint">Đổi nếu cần. Mặc định lấy ở biến trong code hoặc ?api=...</span>
+    <span class="hint">Có thể đổi tạm bằng ?api=https://...</span>
   </div>
 
   <!-- UPLOAD -->
@@ -80,7 +80,7 @@
 
 <script>
   // === CẤU HÌNH API BASE KHI CHẠY TRÊN GITHUB PAGES ===
-  const API_BASE_DEFAULT = 'https://<TEN-APP>.vercel.app'; // TODO: đổi sang domain Vercel thật
+  const API_BASE_DEFAULT = 'https://pic-flame.vercel.app';
   let API_BASE = new URLSearchParams(location.search).get('api') || localStorage.getItem('API_BASE') || API_BASE_DEFAULT;
   const apiInput = document.getElementById('apiBaseInput');
   apiInput.value = API_BASE;
