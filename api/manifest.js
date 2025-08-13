@@ -49,12 +49,12 @@ async function getManifest(){
   return { json: JSON.parse(content), sha: f.sha };
 }
 
-async function putManifest(paths, prevSha){
-  const content = JSON.stringify(paths, null, 2);
+async function putManifest(names, prevSha){
+  const content = JSON.stringify(names, null, 2); // << chỉ tên file
   const r = await gh(`/repos/${GH_OWNER}/${GH_REPO}/contents/${encodeURIComponent(MANIFEST_PATH)}`,{
     method:'PUT',
     body: JSON.stringify({
-      message:`chore(manifest): rebuild (${paths.length} items)`,
+      message:`chore(manifest): rebuild (${names.length} items)`,
       content: toBase64(Buffer.from(content,'utf8')),
       branch: GH_BRANCH,
       sha: prevSha || undefined
@@ -79,11 +79,13 @@ export default async function handler(req,res){
     }
 
     if(req.method === 'POST'){
+      // rebuild dựa trên thư mục slides/, nhưng CHỈ GHI TÊN FILE
       const files = await getDirImages();
+      const names = files.map(f => f.name);
       let prevSha = null;
       try{ prevSha = (await getManifest()).sha; }catch(e){}
-      const out = await putManifest(files.map(f=>f.path), prevSha);
-      res.status(200).json({ manifestCount: files.length, commitSha: out.commit.sha });
+      const out = await putManifest(names, prevSha);
+      res.status(200).json({ manifestCount: names.length, commitSha: out.commit.sha });
       return;
     }
 
