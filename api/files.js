@@ -98,9 +98,10 @@ async function ensureUniqueName(desired){
   throw new Error('Không tạo được tên file duy nhất');
 }
 
+// >>> CHỈ GHI TÊN FILE vào manifest.json <<<
 async function rebuildManifest(){
   const files = await getDirImages();
-  const arr = files.map(f => f.path); // manifest: mảng chuỗi
+  const arr = files.map(f => f.name); // <-- chỉ tên, không có "slides/"
   const content = toBase64(Buffer.from(JSON.stringify(arr, null, 2), 'utf8'));
   let oldSha = null;
   try{ const mf = await getFile(MANIFEST_PATH); oldSha = mf.sha; }catch(e){}
@@ -161,7 +162,7 @@ export default async function handler(req, res){
       if (!isImageName(desired)) { res.status(400).json({ error: 'Tên mới không đúng định dạng ảnh' }); return; }
       desired = await ensureUniqueName(desired);
 
-      // tạo file mới với cùng nội dung
+      // tạo file mới với cùng nội dung (base64 do GitHub trả)
       const contentB64 = file.content;
       await putFile(`${IMAGE_DIR}/${desired}`, contentB64, `chore(slides): rename ${old_path.split('/').pop()} -> ${desired}`);
       // xóa file cũ
